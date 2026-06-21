@@ -1,0 +1,25 @@
+name: sisakulint
+on:
+  pull_request:
+    paths: [".github/workflows/**"]
+  push:
+    branches: [main]
+    paths: [".github/workflows/**"]
+
+permissions:
+  contents: read
+  pull-requests: write    # inline PR annotations
+  security-events: write  # only if upload-sarif: true
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        with:
+          persist-credentials: false
+
+      - uses: sisaku-security/sisakulint-action@596af4ab15e8c5b232c74aa97525a0302e7b7af4 # v1.0.0
+        with:
+          fail-on: high        # none | low | medium | high | critical
+          upload-sarif: true   # send SARIF to GitHub Code Scanning
