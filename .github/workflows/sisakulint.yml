@@ -1,32 +1,23 @@
+# .github/workflows/sisakulint.yml
 name: sisakulint
+
 on:
   pull_request:
     paths: [".github/workflows/**"]
   push:
-    branches: [main]
+    branches: ["main"]
     paths: [".github/workflows/**"]
+  schedule:
+    - cron: "0 3 * * 1"
 
 permissions:
   contents: read
-  pull-requests: write    # inline PR annotations
-  security-events: write  # only if upload-sarif: true
 
 jobs:
   scan:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683            # v4.2.2
         with:
           persist-credentials: false
-
-      - uses: reviewdog/action-setup@v1
-      
-- name: sisakulint + reviewdog
-  env:
-    REVIEWDOG_GITHUB_API_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-  run: |
-    curl -sSL -o sisakulint \
-      https://github.com/sisaku-security/sisakulint/releases/latest/download/sisakulint-linux-amd64
-    chmod +x sisakulint
-    ./sisakulint -format "{{sarif .}}" \
-      | reviewdog -f=sarif -reporter=github-pr-review -filter-mode=nofilter
+      - uses: sisaku-security/sisakulint-action@596af4ab15e8c5b232c74aa97525a0302e7b7af4  # v1.0.0
