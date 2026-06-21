@@ -1,0 +1,22 @@
+# Drop into any repo as .github/workflows/sisakulint.yml.
+name: sisakulint
+
+on:
+  pull_request:
+    paths: [".github/workflows/**"]
+  push:
+    branches: ["main"]
+    paths: [".github/workflows/**"]
+  schedule:
+    - cron: "0 3 * * 1"
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  scan:
+    uses: sisaku-security/sisakulint-action/.github/workflows/scan.yml@596af4ab15e8c5b232c74aa97525a0302e7b7af4  # v1.0.0
+    with:
+      fail-on: critical
+      upload-sarif: true
