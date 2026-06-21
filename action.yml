@@ -1,0 +1,209 @@
+name: sisakulint
+description: Fast SAST for GitHub Actions workflows. Scans, autofixes, and uploads SARIF to Code Scanning.
+author: sisaku-security
+branding:
+  icon: shield
+  color: purple
+
+inputs:
+  version:
+    description: |
+      sisakulint release tag to install (e.g. "0.3.0", "v0.3.0").
+      Defaults to the version pinned by this Action release.
+    required: false
+    default: "0.3.0"
+  working-directory:
+    description: Directory to run sisakulint from. Defaults to the repo root ($GITHUB_WORKSPACE).
+    required: false
+    default: ""
+  args:
+    description: |
+      Extra raw args passed verbatim to sisakulint after the standard flags.
+      Use for things like `-ignore "pattern"` or specific file paths.
+    required: false
+    default: ""
+  config-file:
+    description: Path to a sisakulint config file (passed as `-config-file`).
+    required: false
+    default: ""
+  autofix:
+    description: |
+      Auto-fix mode. One of: off | on | dry-run.
+      `dry-run` reports proposed fixes without modifying files.
+      `on` writes fixes in-place — use with a follow-up commit/push step.
+    required: false
+    default: "off"
+  fail-on:
+    description: |
+      Minimum finding severity that fails the job.
+      One of: none | low | medium | high | critical.
+      `none` always succeeds; `critical` only fails on -critical rules; etc.
+    required: false
+    default: "high"
+  upload-sarif:
+    description: |
+      Upload SARIF results to GitHub Code Scanning (true/false).
+      Requires `permissions: security-events: write` on the calling job.
+    required: false
+    default: "false"
+  sarif-file:
+    description: Path where SARIF output is written.
+    required: false
+    default: "sisakulint.sarif"
+
+outputs:
+  sarif-file:
+    description: Path to the generated SARIF file.
+    value: ${{ steps.scan.outputs.sarif-file }}
+  findings:
+    description: Total number of SARIF results produced by the scan.
+    value: ${{ steps.scan.outputs.findings }}
+  failing-findings:
+    description: Number of findings at or above the `fail-on` severity threshold.
+    value: ${{ steps.scan.outputs.failing-findings }}
+  resolved-version:
+    description: The concrete sisakulint version that was installed.
+    value: ${{ steps.install.outputs.resolved-version }}
+
+runs:
+  using: composite
+  steps:
+    - name: Install sisakulint
+      id: install
+      shell: bash
+      env:
+        INPUT_VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+        VERSION="${INPUT_VERSION#v}"
+        if [[ -z "$VERSION" ]]; then
+          echo "::error::version input must be a release tag like 0.3.0"
+          exit 1
+        fi
+        case "$RUNNER_OS" in
+          Linux)   os=linux ;;
+          macOS)   os=darwin ;;
+          Windows)
+            echo "::error::sisakulint-action does not support Windows runners"
+            exit 1 ;;
+          *) echo "::error::Unsupported runner OS: $RUNNER_OS"; exit 1 ;;
+        esac
+        case "$RUNNER_ARCH" in
+          X64)   arch=amd64 ;;
+          ARM64) arch=arm64 ;;
+          *) echo "::error::Unsupported runner arch: $RUNNER_ARCH"; exit 1 ;;
+        esac
+
+        install_dir="$RUNNER_TEMP/sisakulint-${VERSION}"
+        mkdir -p "$install_dir"
+        cd "$install_dir"
+
+        base="https://github.com/sisaku-security/sisakulint/releases/download/v${VERSION}"
+        archive="sisakulint_${VERSION}_${os}_${arch}.tar.gz"
+        checksums="sisakulint_${VERSION}_checksums.txt"
+
+        echo "::group::Downloading $archive"
+        curl -fsSL -o "$archive"    "$base/$archive"
+        curl -fsSL -o "$checksums"  "$base/$checksums"
+        echo "::endgroup::"
+
+        echo "::group::Verifying checksum"
+        expected=$(grep " $archive\$" "$checksums" | awk '{print $1}')
+        if [[ -z "$expected" ]]; then
+          echo "::error::checksum entry not found for $archive in $checksums"
+          exit 1
+        fi
+        actual=$(shasum -a 256 "$archive" | awk '{print $1}')
+        if [[ "$expected" != "$actual" ]]; then
+          echo "::error::checksum mismatch (expected=$expected actual=$actual)"
+          exit 1
+        fi
+        echo "ok: $actual"
+        echo "::endgroup::"
+
+        tar -xf "$archive"
+        chmod +x sisakulint
+        echo "$install_dir" >> "$GITHUB_PATH"
+        echo "resolved-version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+    - name: Run sisakulint
+      id: scan
+      shell: bash
+      env:
+        SISAKULINT_AUTOFIX: ${{ inputs.autofix }}
+        SISAKULINT_CONFIG: ${{ inputs.config-file }}
+        SISAKULINT_ARGS: ${{ inputs.args }}
+        SISAKULINT_WORKDIR: ${{ inputs.working-directory }}
+        SISAKULINT_SARIF: ${{ inputs.sarif-file }}
+        SISAKULINT_FAIL_ON: ${{ inputs.fail-on }}
+      run: |
+        set -euo pipefail
+        if [[ -n "$SISAKULINT_WORKDIR" ]]; then
+          cd "$SISAKULINT_WORKDIR"
+        fi
+
+        case "$SISAKULINT_AUTOFIX" in
+          off|on|dry-run) ;;
+          *) echo "::error::autofix must be one of: off, on, dry-run (got: $SISAKULINT_AUTOFIX)"; exit 1 ;;
+        esac
+
+        case "$SISAKULINT_FAIL_ON" in
+          none|low|medium|high|critical) ;;
+          *) echo "::error::fail-on must be one of: none, low, medium, high, critical (got: $SISAKULINT_FAIL_ON)"; exit 1 ;;
+        esac
+
+        sarif_abs="$SISAKULINT_SARIF"
+        case "$sarif_abs" in /*) ;; *) sarif_abs="$PWD/$sarif_abs" ;; esac
+        mkdir -p "$(dirname "$sarif_abs")"
+
+        cfg_args=()
+        if [[ -n "$SISAKULINT_CONFIG" ]]; then
+          cfg_args+=(-config-file "$SISAKULINT_CONFIG")
+        fi
+
+        # POSIX shell-quote aware split so users can pass args like:
+        #   -ignore "rule-id"
+        # without the quotes being preserved as literal characters.
+        extra_args=()
+        while IFS= read -r tok; do
+          extra_args+=("$tok")
+        done < <(
+          python3 -c 'import shlex,sys; sys.stdout.write("".join(t+chr(10) for t in shlex.split(sys.argv[1])))' "$SISAKULINT_ARGS"
+        )
+
+        echo "::group::sisakulint scan (SARIF)"
+        set +e
+        sisakulint \
+          -fix "$SISAKULINT_AUTOFIX" \
+          "${cfg_args[@]}" \
+          -format '{{sarif .}}' \
+          "${extra_args[@]}" \
+          > "$sarif_abs"
+        scan_exit=$?
+        set -e
+        echo "scan_exit=$scan_exit"
+        echo "::endgroup::"
+
+        if [[ ! -s "$sarif_abs" ]]; then
+          echo "::error::sisakulint produced no SARIF output (exit=$scan_exit)"
+          exit "${scan_exit:-1}"
+        fi
+
+        echo "::group::Emitting GitHub annotations"
+        python3 "$GITHUB_ACTION_PATH/scripts/sarif_annotate.py" "$sarif_abs"
+        echo "::endgroup::"
+
+        echo "::group::Applying fail-on policy (threshold=$SISAKULINT_FAIL_ON)"
+        set +e
+        python3 "$GITHUB_ACTION_PATH/scripts/sarif_gate.py" "$sarif_abs" "$SISAKULINT_FAIL_ON"
+        gate_exit=$?
+        set -e
+        echo "::endgroup::"
+        exit $gate_exit
+
+    - name: Upload SARIF to Code Scanning
+      if: ${{ always() && inputs.upload-sarif == 'true' && hashFiles(inputs.sarif-file) != '' }}
+      uses: github/codeql-action/upload-sarif@9e0d7b8d25671d64c341c19c0152d693099fb5ba  # v4.35.5
+      with:
+        sarif_file: ${{ inputs.sarif-file }}
+        category: sisakulint
