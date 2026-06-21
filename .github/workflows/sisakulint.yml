@@ -19,7 +19,14 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: sisaku-security/sisakulint-action@596af4ab15e8c5b232c74aa97525a0302e7b7af4 # v1.0.0
-        with:
-          fail-on: high        # none | low | medium | high | critical
-          upload-sarif: true   # send SARIF to GitHub Code Scanning
+      - uses: reviewdog/action-setup@v1
+      
+- name: sisakulint + reviewdog
+  env:
+    REVIEWDOG_GITHUB_API_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  run: |
+    curl -sSL -o sisakulint \
+      https://github.com/sisaku-security/sisakulint/releases/latest/download/sisakulint-linux-amd64
+    chmod +x sisakulint
+    ./sisakulint -format "{{sarif .}}" \
+      | reviewdog -f=sarif -reporter=github-pr-review -filter-mode=nofilter
