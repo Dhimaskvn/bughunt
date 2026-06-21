@@ -16,7 +16,7 @@ permissions:
 
 jobs:
   scan:
-    uses: sisaku-security/sisakulint-action/.github/workflows/scan.yml@596af4ab15e8c5b232c74aa97525a0302e7b7af4  # v1.0.0
+    uses: sisaku-security/sisakulint-action/.github/workflows/scan.yml@604b94b3526b39662d2109e0259223beeac36136  # v1.0.0
     with:
       fail-on: critical
       upload-sarif: true
